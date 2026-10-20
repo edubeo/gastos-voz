@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dictar Gasto</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f172a; color: white; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; }
+        button { background: #2563eb; color: white; border: none; border-radius: 50px; width: 120px; height: 120px; font-size: 50px; display: flex; align-items: center; justify-content: center; box-shadow: 0 10px 25px rgba(37,99,235,0.4); cursor: pointer; transition: transform 0.1s; }
+        button:active { transform: scale(0.95); }
+        #status { margin-top: 25px; font-size: 18px; text-align: center; padding: 0 20px; color: #94a3b8; }
+    </style>
+</head>
+<body>
+
+    <button id="micBtn" onclick="empezarDictado()">🎙️</button>
+    <div id="status">Toca el micrófono y di tu gasto</div>
+
+    <script>
+        const WEB_URL = "https://script.google.com/macros/s/AKfycbywkAWMkFLZBIiiNsdg-utaSNUF7WQ5QKeI40tp2v4N_d3TnLWV7MBilu1TkJvDoJaQSQ/exec"; // Recuerda poner tu enlace real de Apps Script
+
+        function empezarDictado() {
+            const recognition = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
+            recognition.lang = 'es-CL';
+            recognition.start();
+
+            document.getElementById("status").innerText = "Escuchando...";
+
+            recognition.onresult = function(event) {
+                const textoDictado = event.results[0][0].transcript;
+                document.getElementById("status").innerText = "Procesando: " + textoDictado;
+                procesarYEnviar(textoDictado);
+            };
+
+            recognition.onerror = function(event) {
+                document.getElementById("status").innerText = "Error al escuchar. Inténtalo de nuevo.";
+            };
+        }
+
+        function clasificarGasto(concepto) {
+            const texto = concepto.toLowerCase();
+            
+            if (/snacks|dulces/i.test(texto)) return "Snacks";
+            if (/faunalandia|koshka|stana|vanya|premios/i.test(texto)) return "Gatos";
+            if (/gundam|3d|cartas|warhammer|figuras|pinturas/i.test(texto)) return "Ñoñeria";
+            if (/comida lj|jumbo|unimarc|vecino|bernardo|supermercado/i.test(texto)) return "Comida LJ";
+            if (/farmacia|remedios|doctor|mirtha/i.test(texto)) return "Salud";
+            if (/sodimac|casa/i.test(texto)) return "Casa";
+            
+            return "Voz";
+        }
+
+        function interpretarDictado(textoCompleto) {
+            let t = textoCompleto.toLowerCase().trim();
+
+            const numsText = {
+                'un': 1, 'uno': 1, 'dos': 2, 'tres': 3, 'cuatro': 4, 'cinco': 5, 
+                'seis': 6, 'siete': 7, 'ocho': 8, 'nueve': 9, 'diez': 10,
+                'once': 11, 'doce': 12, 'trece': 13, 'catorce': 14, 'quince': 15,
+                'dieciséis': 16, 'dieciseis': 16, 'diecisiete': 17, 'dieciocho': 18, 'diecinueve': 19,
+                'veinte': 20, 'treinta': 30, 'cuarenta': 40, 'cincuenta': 50,
+                'sesenta': 60, 'setenta': 70, 'ochenta': 80, 'noventa': 90,
+                'cien': 100, 'ciento': 100, 'doscientos': 200, 'trescientos': 300, 
+                'cuatrocientos': 400, 'quinientos': 500, 'seiscientos': 600, 
+                'setecientos': 700, 'ochocientos': 800, 'novecientos': 900
+            };
+
+            let palabrasArr = t.split(" ");
+
+            // REGLA 1: Detección de salto de cientos sin usar "mil" (Ej: "vania ciento diez quinientos")
+            let firstNumIndex = -1;
+            for(let i = 0; i < palabrasArr.length; i++) {
+                if(numsText[palabrasArr[i]]) {
+                    firstNumIndex = i;
+                    break;
+                }
+            }
+
+            if (firstNumIndex !== -1) {
+                let numWords = [];
+                for(let i = firstNumIndex; i < palabrasArr.length; i++) {
+                    if(numsText[palabrasArr[i]]) numWords.push(numsText[palabrasArr[i]]);
+                    else break;
+                }
+                
+                if (numWords.length >= 2) {
+                    let miles = 0;
+                    let current = 0;
+
+                    for(let i = 0; i < numWords.length; i++) {
+                        if (i > 0 && numWords[i] >= 100 && numWords[i-1] < 100) {
+                            miles = current;
+                            current = numWords[i];
+                        } 
+                        else if (i > 0 && numWords[i] >= 100 && numWords[i-1] >= 100) {
+                            miles = current;
+                            current = numWords[i];
+                        } else {
+                            current += numWords[i];
+                        }
+                    }
+                    
+                    if (miles > 0) {
+                        let montoCalculado = (miles * 1000) + current;
+                        palabrasArr.splice(firstNumIndex, numWords.length);
+                        return { monto: montoCalculado, concepto: palabrasArr.join(" ").trim() };
+                    }
+                }
+            }
+
+            // REGLA 2: Escáner universal con ancla en "mil" (Ej: "vania once mil nueve noventa")
+            let idxMil = palabrasArr.indexOf("mil");
+            if (idxMil >= 0) {
+                let leftNumStart = idxMil;
+                let miles = 0;
+                
+                if (idxMil === 0) {
+                    miles = 1; // Para cuando dicen "mil dos"
+                } else {
+                    for (let i = idxMil - 1; i >= 0; i--) {
+                        let w = palabrasArr[i];
+                        if (numsText[w]) {
+                            miles += numsText[w];
+                            leftNumStart = i;
+                        } else if (!isNaN(parseFloat(w.replace(/[^0-9]/g, ''))) && !/[a-zA-Z]/.test(w)) {
+                            miles += parseFloat(w.replace(/[^0-9]/g, ''));
+                            leftNumStart = i;
+                        } else if (w === "y") {
+                            leftNumStart = i; 
+                        } else {
+                            break; 
+                        }
+                    }
+                }
+
+                if (miles > 0) {
+                    let rightWords = palabrasArr.slice(idxMil + 1);
+                    let rightSum = 0;
+                    let wordsUsedRight = 0;
+
+                    for (let i = 0; i < rightWords.length; i++) {
+                        let w = rightWords[i];
+                        if (numsText[w] !== undefined) {
+                            // Regla chilena: si la primera palabra post-mil es del 1 al 9, es centena
+                            if (wordsUsedRight === 0 && numsText[w] >= 1 && numsText[w] <= 9) {
+                                rightSum += numsText[w] * 100;
+                            } else {
+                                rightSum += numsText[w];
+                            }
+                            wordsUsedRight++;
+                        } else if (!isNaN(parseFloat(w.replace(/[^0-9]/g, ''))) && !/[a-zA-Z]/.test(w)) {
+                            rightSum += parseFloat(w.replace(/[^0-9]/g, ''));
+                            wordsUsedRight++;
+                        } else if (w === "y") {
+                            wordsUsedRight++;
+                        } else {
+                            break;
+                        }
+                    }
+
+                    let montoCalculado = (miles * 1000) + rightSum;
+                    let totalWordsToRemove = (idxMil - leftNumStart) + 1 + wordsUsedRight;
+                    palabrasArr.splice(leftNumStart, totalWordsToRemove);
+                    return { monto: montoCalculado, concepto: palabrasArr.join(" ").trim() };
+                }
+            }
+
+            // REGLA 3: REGLA MATEMÁTICA DEFINITIVA (Maneja transcripciones puras de celular como "vania 11.990")
+            let palabras = t.split(" ");
+            let indicesNumeros = [];
+
+            palabras.forEach((palabra, index) => {
+                // Limpiador agresivo: borra puntos y comas, pero ignora letras para no romper palabras como "ps5"
+                let limpia = palabra.replace(/[^0-9]/g, '');
+                if (limpia.length > 0 && !/[a-zA-Z]/.test(palabra)) {
+                    indicesNumeros.push({index: index, valor: limpia});
+                }
+            });
+
+            let monto = 0;
+            let palabrasConcepto = [...palabras];
+
+            if (indicesNumeros.length > 0) {
+                let startIndex = indicesNumeros[0].index;
+                let combinado = indicesNumeros[0].valor;
+                let wordsToRemove = 1;
+
+                // Junta bloques si el celular los separó (ej: "11 990")
+                for (let i = 1; i < indicesNumeros.length; i++) {
+                    if (indicesNumeros[i].index === indicesNumeros[i-1].index + 1) {
+                        combinado += indicesNumeros[i].valor;
+                        wordsToRemove++;
+                    } else {
+                        break;
+                    }
+                }
+
+                let valorNumerico = parseFloat(combinado);
+                
+                if (valorNumerico >= 1000) {
+                    let miles = Math.floor(valorNumerico / 1000) * 1000; 
+                    let resto = valorNumerico % 1000;                    
+                    
+                    // Solo aplica regla chilena de multiplicar x100 si el resto es de 1 a 9 exactos
+                    if (resto >= 1 && resto <= 9) {
+                        monto = miles + (resto * 100);
+                    } else {
+                        monto = valorNumerico; 
+                    }
+                } else {
+                    monto = valorNumerico;
+                }
+                
+                palabrasConcepto.splice(startIndex, wordsToRemove);
+            }
+
+            return {
+                monto: monto,
+                concepto: palabrasConcepto.join(" ").trim()
+            };
+        }
+
+        function procesarYEnviar(texto) {
+            let resultado = interpretarDictado(texto);
+            let monto = resultado.monto;
+            let concepto = resultado.concepto;
+
+            if (!concepto && monto > 0) {
+                concepto = texto; 
+            }
+
+            let categoria = clasificarGasto(concepto);
+
+            const form = document.createElement('form');
+            form.method = 'POST';
+            form.action = WEB_URL;
+            form.target = 'hidden_iframe';
+
+            const payload = {
+                concepto: concepto,
+                monto: monto,
+                categoria: categoria
+            };
+
+            const input = document.createElement('input');
+            input.type = 'hidden';
+            input.name = 'data';
+            input.value = JSON.stringify(payload);
+            form.appendChild(input);
+
+            let iframe = document.getElementById('hidden_iframe');
+            if (!iframe) {
+                iframe = document.createElement('iframe');
+                iframe.name = 'hidden_iframe';
+                iframe.style.display = 'none';
+                document.body.appendChild(iframe);
+            }
+
+            document.body.appendChild(form);
+            form.submit();
+            document.body.removeChild(form);
+
+            document.getElementById("status").innerText = `¡Enviado!\n${concepto} - $${monto} [${categoria}]`;
+            setTimeout(() => { window.close(); }, 2000);
+        }
+    </script>
+</body>
+</html>
